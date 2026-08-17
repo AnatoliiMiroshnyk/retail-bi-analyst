@@ -10,7 +10,7 @@ def generate_markdown_report(kpi: KPIResult, rfm: Dict[str, RFMScores]) -> str:
     """
     Generate markdown report from metrics
     """
-    lines: list[str] = []
+    lines: list[str] = list()
 
     lines.append("# Sales report")
     lines.append("")
