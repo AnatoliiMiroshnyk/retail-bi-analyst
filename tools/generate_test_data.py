@@ -100,13 +100,13 @@ def generate_sales(n_rows: int = 200) -> pd.DataFrame:
     return df
 
 def save_csv(df: pd.DataFrame) -> Path:
-    csv_path = DATA_DIR / "mvp_sales.csv"
+    csv_path = DATA_DIR / "test_sales.csv"
     df.to_csv(csv_path, index=False)
     print(f"CSV written to {csv_path}")
     return csv_path
 
 def save_sql_init_script(df: pd.DataFrame) -> Path:
-    sql_path = DATA_DIR / "mvp_sales.sqlite_init.sql"
+    sql_path = DATA_DIR / "test_sales.sqlite_init.sql"
 
     columns = [
         "sale_id INTEGER NOT NULL PRIMARY KEY",
@@ -133,11 +133,24 @@ def save_sql_init_script(df: pd.DataFrame) -> Path:
             f"{int(row['sale_id'])}, "
             f"'{row['sale_date']}', "
             f"'{row['customer_id']}', "
-            f"'{row['customer_name'].replace(\"'\", \"''\")}', "
+            f"""'{row["customer_name"].replace("'", "''")}', """
             f"'{row['product_id']}', "
-            f"'{row['product_name'].replace(\"'\", \"''\")}', "
+            f"""'{row["product_name"].replace("'", "''")}', """
             f"'{row['category']}', "
             f"{int(row['quantity'])}, "
             f"{float(row['unit_price'])}, "
             f"{float(row['total_price'])}"
         )
+        lines.append(f"INSERT INTO sales VALUES ({values});")
+
+    sql_path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"SQLite init script written to {sql_path}")
+    return sql_path
+
+def main() -> None:
+    df = generate_sales(n_rows=200)
+    save_csv(df)
+    save_sql_init_script(df)
+
+if __name__ == "__main__":
+    main()
