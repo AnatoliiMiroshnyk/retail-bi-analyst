@@ -13,7 +13,7 @@ from typing import List, Dict
 import numpy as np
 import pandas as pd
 
-PROJECT_ROOT = Path(__file__).resolve().parent[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
 DATA_DIR.mkdir(exist_ok=True)
 

@@ -32,7 +32,7 @@ def calculate_kpi_results(df: pd.DataFrame) -> KPIResult:
     if df.empty:
         return KPIResult(0.0, 0.0, 0, 0)
 
-    total_revenue = float(df["total_revenue"].sum())
+    total_revenue = float(df["total_price"].sum())
     transactions_count = int(df.shape[0])
     unique_customers = int(df["customer_id"].nunique())
     avg_ticket = total_revenue / transactions_count if transactions_count > 0 else 0.0
