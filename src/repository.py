@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Optional
 import pandas as pd
 from datetime import datetime
-from config import DEFAULT_DATE_FORMAT #??
+from src.config import DEFAULT_DATE_FORMAT #??
 
 
 @dataclass

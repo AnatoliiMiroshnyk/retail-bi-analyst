@@ -12,8 +12,8 @@ from datetime import datetime
 
 import pandas as pd
 
-from analytics import calculate_kpi_results, calculate_rfm_results
-from report_generator import generate_markdown_report
+from src.analytics import calculate_kpi_results, calculate_rfm_results
+from src.report_generator import generate_markdown_report
 
 
 def _build_small_df() -> pd.DataFrame:

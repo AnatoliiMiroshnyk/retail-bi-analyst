@@ -12,8 +12,8 @@ from __future__ import annotations
 from pathlib import Path
 import sqlite3
 
-from data_loader import DataSourceConfig, DataLoader
-from repository import SalesRepository
+from src.data_loader import DataSourceConfig, DataLoader
+from src.repository import SalesRepository
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"

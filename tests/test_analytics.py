@@ -13,9 +13,9 @@ from pathlib import Path
 from datetime import timedelta
 import sqlite3
 
-from data_loader import DataLoader, DataSourceConfig
-from repository import SalesRepository, SalesFilter
-from analytics import calculate_kpi_results, calculate_rfm_results
+from src.data_loader import DataLoader, DataSourceConfig
+from src.repository import SalesRepository, SalesFilter
+from src.analytics import calculate_kpi_results, calculate_rfm_results
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_DIR / "data"

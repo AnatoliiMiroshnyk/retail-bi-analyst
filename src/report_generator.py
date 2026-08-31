@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 from typing import Dict
-from analytics import KPIResult, RFMScores
+from src.analytics import KPIResult, RFMScores
 
 def generate_markdown_report(kpi: KPIResult, rfm: Dict[str, RFMScores]) -> str:
     """

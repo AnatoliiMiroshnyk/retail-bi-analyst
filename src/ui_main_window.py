@@ -33,11 +33,11 @@ from PySide6.QtGui import (
     QTextOption,
 )
 
-from data_loader import DataSourceConfig, DataLoader
-from repository import SalesRepository, SalesFilter
-from analytics import calculate_kpi_results, calculate_rfm_results
-from report_generator import generate_markdown_report
-from config import APP_NAME, REPORT_FILENAME
+from src.data_loader import DataSourceConfig, DataLoader
+from src.repository import SalesRepository, SalesFilter
+from src.analytics import calculate_kpi_results, calculate_rfm_results
+from src.report_generator import generate_markdown_report
+from src.config import APP_NAME, REPORT_FILENAME
 
 
 class MainWindow(QMainWindow):

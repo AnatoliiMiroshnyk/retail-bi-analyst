@@ -4,7 +4,7 @@
 
 from PySide6.QtWidgets import QApplication
 import sys
-from ui_main_window import MainWindow
+from src.ui_main_window import MainWindow
 
 def main() -> None:
     """
