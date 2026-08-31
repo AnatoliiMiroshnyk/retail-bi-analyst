@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "Retail BI Analyst"
+version = "0.1.0"
+description = """A desktop business analytics application that transforms raw sales data into clear,
+actionable insights for small and medium businesses. Built with Python, PySide6, pandas, and SQLite,
+it demonstrates modern data engineering and GUI development practices in a compact,
+production‑style codebase."""
+readme = "README.md"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+
+testpaths = ["tests"]
+
+norecursedirs = [".venv", ".idea", "__pycache__", ".pytest_cache"]
+
+addopts = "-v"
