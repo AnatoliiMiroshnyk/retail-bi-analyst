@@ -1,7 +1,8 @@
 """
-    Generating test data:
-        - data/mvp_sales.csv
-        - data/mvp_sales.sqlite_init.sql
+Generating test data for MVP:
+    - data/test_sales.csv
+    - data/test_sales.sqlite_init.sql
+    - data/test_sales.db (real SQLite DB with table `sales`)
 """
 
 from __future__ import annotations
@@ -12,12 +13,17 @@ from typing import List, Dict
 
 import numpy as np
 import pandas as pd
+import sqlite3
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
+
 def build_products() -> List[Dict]:
+    """
+    Realistic product catalog: stationery, grocery, beverages, food.
+    """
     return [
         {
             "product_id": "P001",
@@ -51,7 +57,11 @@ def build_products() -> List[Dict]:
         },
     ]
 
+
 def build_customers() -> List[Dict]:
+    """
+    Simple customer list with realistic names.
+    """
     return [
         {"customer_id": "C001", "customer_name": "Alice Johnson"},
         {"customer_id": "C002", "customer_name": "Bob Smith"},
@@ -61,7 +71,14 @@ def build_customers() -> List[Dict]:
         {"customer_id": "C006", "customer_name": "Fiona Davis"},
     ]
 
-def generate_sales(n_rows: int = 200) -> pd.DataFrame:
+
+def generate_sales(n_rows: int = 250) -> pd.DataFrame:
+    """
+    Generate a medium-sized, realistic sales dataset:
+    - 250 transactions
+    - distributed between Jan–Mar 2025
+    - multiple products and customers
+    """
     rng = np.random.default_rng(seed=42)
 
     products = build_products()
@@ -73,14 +90,15 @@ def generate_sales(n_rows: int = 200) -> pd.DataFrame:
 
     rows = []
 
-    for sale_id in range(1, n_rows+1):
+    for sale_id in range(1, n_rows + 1):
+        # random day in the range
         sale_date = start_date + timedelta(days=int(rng.integers(0, n_days)))
         product = products[int(rng.integers(0, len(products)))]
         customer = customers[int(rng.integers(0, len(customers)))]
-        quantity = int(rng.integers(1, 10))
+        quantity = int(rng.integers(1, 10))  # 1..9 units
 
         unit_price = product["unit_price"]
-        total_price = round(unit_price * quantity)
+        total_price = round(unit_price * quantity, 2)
 
         rows.append(
             {
@@ -96,8 +114,10 @@ def generate_sales(n_rows: int = 200) -> pd.DataFrame:
                 "total_price": total_price,
             }
         )
+
     df = pd.DataFrame(rows)
     return df
+
 
 def save_csv(df: pd.DataFrame) -> Path:
     csv_path = DATA_DIR / "test_sales.csv"
@@ -105,12 +125,19 @@ def save_csv(df: pd.DataFrame) -> Path:
     print(f"CSV written to {csv_path}")
     return csv_path
 
+
 def save_sql_init_script(df: pd.DataFrame) -> Path:
+    """
+    Generate an SQL init script that:
+    - drops table `sales` if it exists
+    - creates table `sales`
+    - inserts all rows from the DataFrame
+    """
     sql_path = DATA_DIR / "test_sales.sqlite_init.sql"
 
     columns = [
         "sale_id INTEGER NOT NULL PRIMARY KEY",
-        "sale_date TEXT NOT NULL DEFAULT CURRENT_DATE",
+        "sale_date TEXT NOT NULL",
         "customer_id TEXT NOT NULL",
         "customer_name TEXT NOT NULL",
         "product_id TEXT NOT NULL",
@@ -121,10 +148,10 @@ def save_sql_init_script(df: pd.DataFrame) -> Path:
         "total_price REAL NOT NULL",
     ]
 
-    lines = []
+    lines: list[str] = []
     lines.append("DROP TABLE IF EXISTS sales;")
     lines.append("CREATE TABLE sales (")
-    lines.append(" " + ",\n ".join(columns))
+    lines.append("  " + ",\n  ".join(columns))
     lines.append(");")
     lines.append("")
 
@@ -147,10 +174,34 @@ def save_sql_init_script(df: pd.DataFrame) -> Path:
     print(f"SQLite init script written to {sql_path}")
     return sql_path
 
+
+def create_sqlite_db_from_script(script_path: Path) -> Path:
+    """
+    Create a real SQLite DB `test_sales.db` in data/ using the SQL script.
+    This DB is used both by tests and by the GUI's SQLite import.
+    """
+    db_path = DATA_DIR / "test_sales.db"
+    if db_path.exists():
+        db_path.unlink()
+
+    conn = sqlite3.connect(db_path)
+    try:
+        script = script_path.read_text(encoding="utf-8")
+        conn.executescript(script)
+        conn.commit()
+    finally:
+        conn.close()
+
+    print(f"SQLite DB written to {db_path}")
+    return db_path
+
+
 def main() -> None:
-    df = generate_sales(n_rows=200)
+    df = generate_sales(n_rows=250)
     save_csv(df)
-    save_sql_init_script(df)
+    script_path = save_sql_init_script(df)
+    create_sqlite_db_from_script(script_path)
+
 
 if __name__ == "__main__":
     main()
