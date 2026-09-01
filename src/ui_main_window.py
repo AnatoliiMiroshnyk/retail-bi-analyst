@@ -31,13 +31,18 @@ from PySide6.QtGui import (
     QStandardItemModel,
     QStandardItem,
     QTextOption,
+    QGuiApplication,
 )
+
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
 
 from src.data_loader import DataSourceConfig, DataLoader
 from src.repository import SalesRepository, SalesFilter
 from src.analytics import calculate_kpi_results, calculate_rfm_results
-from src.report_generator import generate_markdown_report
-from src.config import APP_NAME, REPORT_FILENAME
+from src.report_generator import generate_markdown_report, generate_html_report
+from src.config import APP_NAME, REPORT_FILENAME, REPORT_HTML_FILENAME
+from src.graphs import GraphDataChoice, GraphType, build_graph
 
 
 class MainWindow(QMainWindow):
@@ -48,7 +53,9 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(APP_NAME)
-        self.resize(1200, 800)
+
+        screen_geometry = QGuiApplication.primaryScreen().availableGeometry()
+        self.setFixedSize(screen_geometry.width(), screen_geometry.height()-20)
 
         self._repo: Optional[SalesRepository] = None
         self._current_filter: Optional[SalesFilter] = None
@@ -79,9 +86,15 @@ class MainWindow(QMainWindow):
         file_menu.addAction(exit_action)
 
         report_menu = menubar.addMenu("&Report")
-        generate_report_action = QAction("Generate Report", self)
+
+        generate_report_action = QAction("Generate Markdown Report", self)
         generate_report_action.triggered.connect(self._on_generate_report)
         report_menu.addAction(generate_report_action)
+
+        # NEW: HTML report generation
+        generate_html_action = QAction("Generate HTML Report", self)
+        generate_html_action.triggered.connect(self._on_generate_html_report)
+        report_menu.addAction(generate_html_action)
 
     # ------------------ UI -------------------
 
@@ -123,6 +136,11 @@ class MainWindow(QMainWindow):
         apply_filters_btn.clicked.connect(self._on_apply_filters)
         filters_layout.addWidget(apply_filters_btn)
 
+        # NEW: Reset Filters button (под Apply Filters)
+        reset_filters_btn = QPushButton("Reset Filters")
+        reset_filters_btn.clicked.connect(self._on_reset_filters)
+        filters_layout.addWidget(reset_filters_btn)
+
         filters_layout.addStretch(1)
 
         # Правая часть – вкладки
@@ -148,12 +166,12 @@ class MainWindow(QMainWindow):
         analytics_layout = QVBoxLayout(analytics_tab)
 
         kpi_title = QLabel("KPI summary")
-        kpi_title.setAlignment(Qt.AlignLeft)
+        kpi_title.setAlignment(Qt.AlignmentFlag.AlignLeft)
         analytics_layout.addWidget(kpi_title)
         analytics_layout.addWidget(self.kpi_table)
 
         rfm_title = QLabel("RFM analysis")
-        rfm_title.setAlignment(Qt.AlignLeft)
+        rfm_title.setAlignment(Qt.AlignmentFlag.AlignLeft)
         analytics_layout.addWidget(rfm_title)
         analytics_layout.addWidget(self.rfm_table)
 
@@ -162,13 +180,61 @@ class MainWindow(QMainWindow):
         # --- Вкладка Report (рендеринг Markdown) ---
         self.report_view = QTextEdit()
         self.report_view.setReadOnly(True)
-        # перенос слов по границе слов, без горизонтальной прокрутки[web:86][web:88][web:89]
+        # перенос слов по границе слов, без горизонтальной прокрутки
         self.report_view.setWordWrapMode(QTextOption.WrapMode.WordWrap)
 
         report_tab = QWidget()
         report_layout = QVBoxLayout(report_tab)
         report_layout.addWidget(self.report_view)
         self.tabs.addTab(report_tab, "Report")
+
+        # NEW: Вкладка Graphs
+        self.graph_data_combo = QComboBox()
+        self.graph_data_combo.addItems(
+            [
+                GraphDataChoice.REVENUE_BY_DATE,
+                GraphDataChoice.REVENUE_BY_CATEGORY,
+                GraphDataChoice.CUSTOMERS_BY_SEGMENT,
+            ]
+        )
+
+        self.graph_type_combo = QComboBox()
+        self.graph_type_combo.addItems(
+            [
+                GraphType.LINE,
+                GraphType.BAR,
+                GraphType.PIE,
+            ]
+        )
+
+        self.graph_canvas = FigureCanvas(Figure(figsize=(6, 4)))
+        self.graph_axes = self.graph_canvas.figure.add_subplot(111)
+
+        graphs_tab = QWidget()
+        graphs_layout = QVBoxLayout(graphs_tab)
+
+        graphs_layout.addWidget(QLabel("Data for visualization"))
+        graphs_layout.addWidget(self.graph_data_combo)
+
+        graphs_layout.addWidget(QLabel("Chart type"))
+        graphs_layout.addWidget(self.graph_type_combo)
+
+        # размещаем граф по центру (за счёт растяжения)
+        graphs_layout.addWidget(self.graph_canvas, stretch=1)
+
+        graph_buttons_layout = QHBoxLayout()
+        build_graph_btn = QPushButton("Build")
+        build_graph_btn.clicked.connect(self._on_build_graph)
+        save_graph_btn = QPushButton("Save")
+        save_graph_btn.clicked.connect(self._on_save_graph)
+        graph_buttons_layout.addStretch(1)
+        graph_buttons_layout.addWidget(build_graph_btn)
+        graph_buttons_layout.addWidget(save_graph_btn)
+        graph_buttons_layout.addStretch(1)
+
+        graphs_layout.addLayout(graph_buttons_layout)
+
+        self.tabs.addTab(graphs_tab, "Graphs")
 
         main_layout.addLayout(filters_layout, 1)
         main_layout.addWidget(self.tabs, 3)
@@ -215,7 +281,6 @@ class MainWindow(QMainWindow):
         if not file_path:
             return
 
-        # Диалог для выбора имени таблицы
         table_name, ok = QInputDialog.getText(
             self,
             "Table Name",
@@ -292,6 +357,26 @@ class MainWindow(QMainWindow):
         self._update_table(df_filtered)
         self._update_kpi_and_report(df_filtered)
 
+    def _on_reset_filters(self) -> None:
+        """
+        Reset all filters to their initial state and reload full data.
+        """
+        if not self._repo:
+            return
+
+        # reset date range (last month to today)
+        self.date_from_edit.setDate(QDate.currentDate().addMonths(-1))
+        self.date_to_edit.setDate(QDate.currentDate())
+
+        # reset combo boxes
+        self.category_combo.setCurrentIndex(0)
+        self.customer_combo.setCurrentIndex(0)
+
+        self._current_filter = None
+        df_full = self._repo.raw
+        self._update_table(df_full)
+        self._update_kpi_and_report(df_full)
+
     # ------------------ Table & analytics -------------------
 
     def _update_table(self, df: pd.DataFrame) -> None:
@@ -305,11 +390,10 @@ class MainWindow(QMainWindow):
             for col_idx in range(df.shape[1]):
                 value = df.iat[row_idx, col_idx]
                 item = QStandardItem(str(value))
-                # выравнивание: текст слева, числа можно выравнивать справа по желанию
                 if isinstance(value, (int, float)):
-                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 else:
-                    item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 model.setItem(row_idx, col_idx, item)
 
         self.data_table.setModel(model)
@@ -332,10 +416,10 @@ class MainWindow(QMainWindow):
 
         for row_idx, (metric, value) in enumerate(rows):
             metric_item = QStandardItem(metric)
-            metric_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            metric_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
             value_item = QStandardItem(value)
-            value_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            value_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
             model.setItem(row_idx, 0, metric_item)
             model.setItem(row_idx, 1, value_item)
@@ -368,19 +452,19 @@ class MainWindow(QMainWindow):
 
         for row_idx, (cid, recency, freq, monetary, segment) in enumerate(rows):
             cid_item = QStandardItem(cid)
-            cid_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            cid_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
             recency_item = QStandardItem(str(recency))
-            recency_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            recency_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
             freq_item = QStandardItem(str(freq))
-            freq_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            freq_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
             monetary_item = QStandardItem(monetary)
-            monetary_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            monetary_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
             segment_item = QStandardItem(segment)
-            segment_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            segment_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
             model.setItem(row_idx, 0, cid_item)
             model.setItem(row_idx, 1, recency_item)
@@ -409,8 +493,56 @@ class MainWindow(QMainWindow):
         self._update_rfm_table(rfm)
 
         report_md = generate_markdown_report(kpi, rfm)
-        # Отображаем Markdown красиво в QTextEdit.[web:80]
         self.report_view.setMarkdown(report_md)
+
+    # ------------------ Graphs -------------------
+
+    def _on_build_graph(self) -> None:
+        """
+        Build graph in the Graphs tab using selected data and chart type.
+        """
+        if not self._repo:
+            QMessageBox.warning(self, "No Data", "Please select a data source")
+            return
+
+        if self._current_filter is not None:
+            df = self._repo.filtered(self._current_filter)
+        else:
+            df = self._repo.raw
+
+        if df.empty:
+            QMessageBox.warning(self, "No Data", "No rows available for visualization")
+            return
+
+        data_choice = self.graph_data_combo.currentText()
+        chart_type = self.graph_type_combo.currentText()
+
+        try:
+            build_graph(df, data_choice, chart_type, self.graph_axes)
+            self.graph_canvas.draw()
+        except Exception as e:
+            QMessageBox.warning(self, "Graph error", str(e))
+            self.graph_axes.clear()
+            self.graph_canvas.draw()
+
+    def _on_save_graph(self) -> None:
+        """
+        Save current graph as a PNG image.
+        """
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save graph",
+            "graph.png",
+            "PNG Files (*.png);;All Files (*)",
+        )
+        if not file_path:
+            return
+
+        try:
+            self.graph_canvas.figure.savefig(file_path, dpi=150)
+            QMessageBox.information(self, "Success", "Graph saved successfully")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
 
     # ------------------ Report save -------------------
 
@@ -448,5 +580,41 @@ class MainWindow(QMainWindow):
             with open(file_path, "w", encoding="utf-8") as report_file:
                 report_file.write(report_md)
             QMessageBox.information(self, "Success", "Report saved successfully")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+
+    def _on_generate_html_report(self) -> None:
+        """
+        Saves current report as an interactive HTML page.
+        """
+        if not self._repo:
+            QMessageBox.warning(self, "No Data", "Please select a data source")
+            return
+
+        if self._current_filter is not None:
+            df = self._repo.filtered(self._current_filter)
+        else:
+            df = self._repo.raw
+
+        if df.empty:
+            QMessageBox.warning(self, "No Data", "No rows available for HTML report")
+            return
+
+        kpi = calculate_kpi_results(df)
+        rfm = calculate_rfm_results(df)
+        html_report = generate_html_report(kpi, rfm, df)
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save HTML report",
+            REPORT_HTML_FILENAME,
+            "HTML Files (*.html);;All Files (*)",
+        )
+        if not file_path:
+            return
+
+        try:
+            Path(file_path).write_text(html_report, encoding="utf-8")
+            QMessageBox.information(self, "Success", "HTML report saved successfully")
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
