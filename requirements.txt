@@ -1,5 +1,7 @@
-pandas
-PySide6
-matplotlib
-numpy
-pytest
+pandas>=2.0.0
+PySide6>=6.0.0
+matplotlib>=2.0.0
+numpy>=2.0.0
+pytest>=9.0.0
+openpyxl>=3.0.0
+SQLAlchemy>=2.0.0
