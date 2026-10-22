@@ -9,7 +9,7 @@ from typing import Dict
 
 import pandas as pd
 
-from src.analytics import KPIResult, RFMScores
+from core.analytics import KPIResult, RFMScores
 from templates.report_templates_markdown import build_markdown_report_content
 from templates.report_templates_html import build_html_report
 from templates.report_templates_excel import build_excel_workbook
