@@ -10,7 +10,7 @@ import json
 
 import pandas as pd
 
-from src.analytics import KPIResult, RFMScores
+from core.analytics import KPIResult, RFMScores
 
 
 def build_html_report(

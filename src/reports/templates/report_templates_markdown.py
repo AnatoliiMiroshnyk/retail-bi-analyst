@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Dict
 
-from src.analytics import KPIResult, RFMScores
+from core.analytics import KPIResult, RFMScores
 
 
 def build_markdown_report_content(kpi: KPIResult, rfm: Dict[str, RFMScores]) -> str:

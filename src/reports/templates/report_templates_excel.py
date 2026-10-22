@@ -11,7 +11,7 @@ import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 
-from src.analytics import KPIResult, RFMScores
+from core.analytics import KPIResult, RFMScores
 
 
 def build_excel_workbook(
