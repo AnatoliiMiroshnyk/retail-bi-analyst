@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Retail BI Analyst - Web Report</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- Chart.js CDN -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1"></script>
+<style>
+:root {
+  --bg-main: #0f172a;
+  --bg-card: #1e293b;
+  --bg-surface: #020617;
+  --accent: #38bdf8;
+  --accent-soft: rgba(56, 189, 248, 0.15);
+  --text-primary: #f9fafb;
+  --text-secondary: #9ca3af;
+  --positive: #22c55e;
+  --negative: #ef4444;
+  --radius: 12px;
+  --gap: 20px;
+  --shadow-soft: 0 12px 30px rgba(15, 23, 42, 0.6);
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: radial-gradient(circle at top left, #1e293b 0, #020617 45%, #000 100%);
+  color: var(--text-primary);
+}
+
+.dashboard-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.dashboard-header h1 {
+  font-size: 28px;
+  margin: 0;
+}
+
+.dashboard-meta {
+  text-align: right;
+}
+
+.dashboard-meta span {
+  display: block;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--gap);
+  margin-bottom: 24px;
+}
+
+.kpi-card {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-soft);
+  position: relative;
+  overflow: hidden;
+}
+
+.kpi-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at top right, var(--accent-soft), transparent 60%);
+  opacity: 0.9;
+}
+
+.kpi-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+
+.kpi-value {
+  font-size: 26px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.kpi-sub {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.chart-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1.4fr);
+  gap: var(--gap);
+  margin-bottom: 24px;
+}
+
+@media (max-width: 900px) {
+  .chart-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.chart-card {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-soft);
+}
+
+.chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.chart-title {
+  font-size: 16px;
+  margin: 0;
+}
+
+.chart-subtitle {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.chart-container canvas {
+  width: 100%;
+  height: 260px;
+}
+
+.table-section {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-soft);
+  margin-bottom: 24px;
+}
+
+.table-section h2 {
+  margin: 0 0 10px;
+  font-size: 16px;
+}
+
+.table-section p {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.rfm-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.rfm-table th,
+.rfm-table td {
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.rfm-table thead {
+  background: rgba(15,23,42,0.8);
+}
+
+.rfm-table tbody tr:nth-child(even) {
+  background: rgba(15,23,42,0.5);
+}
+
+.rfm-segment-Best { color: var(--positive); }
+.rfm-segment-At\ risk { color: var(--negative); }
+
+.dashboard-footer {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: right;
+  margin-top: 8px;
+}
+</style>
+</head>
+<body>
+<div class="dashboard-container">
+  <header class="dashboard-header">
+    <div>
+      <h1>Retail BI Analyst &mdash; Web Report</h1>
+      <span class="chart-subtitle">Sales performance overview</span>
+    </div>
+    <div class="dashboard-meta">
+      <span>Generated at: 2026-09-01 12:48</span>
+      <span>Data as of: 2025-03-31</span>
+    </div>
+  </header>
+
+  <section class="kpi-row">
+    <article class="kpi-card">
+      <div class="kpi-label">Total Revenue</div>
+      <div class="kpi-value">$6,356.21</div>
+      <div class="kpi-sub">Sum of all transactions</div>
+    </article>
+    <article class="kpi-card">
+      <div class="kpi-label">Average Bill</div>
+      <div class="kpi-value">$25.42</div>
+      <div class="kpi-sub">Average value per transaction</div>
+    </article>
+    <article class="kpi-card">
+      <div class="kpi-label">Transactions</div>
+      <div class="kpi-value">250</div>
+      <div class="kpi-sub">Total number of sales</div>
+    </article>
+    <article class="kpi-card">
+      <div class="kpi-label">Unique Customers</div>
+      <div class="kpi-value">6</div>
+      <div class="kpi-sub">Distinct customers in the period</div>
+    </article>
+  </section>
+
+  <section class="chart-row">
+    <article class="chart-card">
+      <div class="chart-header">
+        <h2 class="chart-title">Revenue Over Time</h2>
+        <span class="chart-subtitle">Daily revenue trend</span>
+      </div>
+      <div class="chart-container">
+        <canvas id="revenueChart"></canvas>
+      </div>
+    </article>
+
+    <article class="chart-card">
+      <div class="chart-header">
+        <h2 class="chart-title">Customers by Segment</h2>
+        <span class="chart-subtitle">RFM segments distribution</span>
+      </div>
+      <div class="chart-container">
+        <canvas id="segmentChart"></canvas>
+      </div>
+    </article>
+  </section>
+
+  <section class="table-section">
+    <h2>RFM Analysis Details</h2>
+    <p>Each row represents a customer with recency, frequency, monetary, and segment assignment.</p>
+    <table class="rfm-table">
+      <thead>
+        <tr>
+          <th>Customer</th>
+          <th>Recency (days)</th>
+          <th>Frequency</th>
+          <th>Monetary</th>
+          <th>Segment</th>
+        </tr>
+      </thead>
+      <tbody>
+<tr><td>C001</td><td>0</td><td>41</td><td>$1,177.06</td><td class="rfm-segment-Best">Best</td></tr>
+<tr><td>C002</td><td>0</td><td>41</td><td>$1,011.93</td><td class="rfm-segment-Best">Best</td></tr>
+<tr><td>C003</td><td>0</td><td>40</td><td>$999.60</td><td class="rfm-segment-Loyal">Loyal</td></tr>
+<tr><td>C004</td><td>4</td><td>43</td><td>$1,141.18</td><td class="rfm-segment-Best">Best</td></tr>
+<tr><td>C005</td><td>6</td><td>43</td><td>$1,079.24</td><td class="rfm-segment-Best">Best</td></tr>
+<tr><td>C006</td><td>2</td><td>42</td><td>$947.20</td><td class="rfm-segment-Loyal">Loyal</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer class="dashboard-footer">
+    <span>Insights powered by Retail BI Analyst</span>
+  </footer>
+</div>
+
+<script>
+const revenueLabels = ["2025-01-01", "2025-01-02", "2025-01-03", "2025-01-04", "2025-01-05", "2025-01-07", "2025-01-08", "2025-01-09", "2025-01-11", "2025-01-12", "2025-01-13", "2025-01-14", "2025-01-15", "2025-01-16", "2025-01-17", "2025-01-18", "2025-01-19", "2025-01-22", "2025-01-23", "2025-01-24", "2025-01-25", "2025-01-26", "2025-01-27", "2025-01-28", "2025-01-29", "2025-01-30", "2025-01-31", "2025-02-02", "2025-02-03", "2025-02-05", "2025-02-06", "2025-02-07", "2025-02-08", "2025-02-09", "2025-02-10", "2025-02-11", "2025-02-12", "2025-02-13", "2025-02-14", "2025-02-15", "2025-02-16", "2025-02-17", "2025-02-18", "2025-02-19", "2025-02-20", "2025-02-21", "2025-02-22", "2025-02-23", "2025-02-24", "2025-02-25", "2025-02-26", "2025-02-27", "2025-03-01", "2025-03-02", "2025-03-03", "2025-03-04", "2025-03-05", "2025-03-06", "2025-03-07", "2025-03-08", "2025-03-09", "2025-03-10", "2025-03-11", "2025-03-12", "2025-03-13", "2025-03-14", "2025-03-15", "2025-03-16", "2025-03-17", "2025-03-18", "2025-03-19", "2025-03-20", "2025-03-21", "2025-03-22", "2025-03-23", "2025-03-24", "2025-03-25", "2025-03-26", "2025-03-27", "2025-03-28", "2025-03-29", "2025-03-30", "2025-03-31"];
+const revenueData = [114.3, 69.24000000000001, 75.0, 49.5, 13.5, 70.8, 71.7, 137.2, 101.4, 201.0, 147.41, 89.4, 38.28, 145.2, 49.88, 72.0, 66.5, 75.95, 70.38, 48.0, 109.23, 91.1, 111.0, 41.6, 84.78, 13.23, 45.0, 146.2, 131.0, 41.6, 26.65, 130.4, 168.4, 107.43, 64.5, 59.46, 123.0, 96.0, 94.5, 76.68, 129.51, 40.65, 103.5, 126.0, 72.0, 35.8, 67.5, 42.0, 27.45, 90.0, 67.5, 88.95, 72.0, 53.0, 21.119999999999997, 60.0, 9.0, 45.84, 136.11, 90.83, 12.0, 33.0, 66.05, 62.34, 100.17, 40.5, 52.5, 109.95, 57.67, 171.3, 44.7, 24.0, 33.0, 14.67, 17.01, 87.74000000000001, 72.6, 141.0, 51.12, 63.33, 144.24, 7.56, 102.6];
+const segmentLabels = ["Best", "Loyal"];
+const segmentData = [4, 2];
+
+// Revenue chart (line)
+const revenueCtx = document.getElementById('revenueChart');
+if (revenueCtx && revenueLabels.length > 0) {
+  new Chart(revenueCtx, {
+    type: 'line',
+    data: {
+      labels: revenueLabels,
+      datasets: [{
+        label: 'Revenue',
+        data: revenueData,
+        borderColor: '#38bdf8',
+        backgroundColor: 'rgba(56, 189, 248, 0.15)',
+        tension: 0.25,
+        fill: true,
+        pointRadius: 3,
+      }],
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: {
+          display: true,
+        },
+        tooltip: {
+          callbacks: {
+            label: function(ctx) {
+              const value = ctx.parsed.y || 0;
+              return 'Revenue: $' + value.toLocaleString();
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          ticks: {
+            maxRotation: 60,
+            minRotation: 30
+          }
+        },
+        y: {
+          beginAtZero: true
+        }
+      }
+    },
+  });
+} else {
+  if (revenueCtx) {
+    revenueCtx.parentElement.innerHTML =
+      '<p style="font-size:13px;color:#9ca3af;">No revenue time series available for this dataset.</p>';
+  }
+}
+
+// Segment chart (bar)
+const segmentCtx = document.getElementById('segmentChart');
+if (segmentCtx && segmentLabels.length > 0) {
+  new Chart(segmentCtx, {
+    type: 'bar',
+    data: {
+      labels: segmentLabels,
+      datasets: [{
+        label: 'Customers',
+        data: segmentData,
+        backgroundColor: ['#22c55e', '#3b82f6', '#ef4444', '#e5e7eb'],
+        borderRadius: 6,
+      }],
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      plugins: {
+        legend: {
+          display: false
+        },
+        tooltip: {
+          callbacks: {
+            label: function(ctx) {
+              const value = ctx.parsed.x || 0;
+              return 'Customers: ' + value.toLocaleString();
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          beginAtZero: true
+        },
+        y: {
+          ticks: {
+            color: '#e5e7eb'
+          }
+        }
+      }
+    },
+  });
+} else {
+  if (segmentCtx) {
+    segmentCtx.parentElement.innerHTML =
+      '<p style="font-size:13px;color:#9ca3af;">No RFM segment data available for this dataset.</p>';
+  }
+}
+</script>
+</body>
+</html>
