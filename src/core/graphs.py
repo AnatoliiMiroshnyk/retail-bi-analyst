@@ -10,7 +10,7 @@ from datetime import datetime
 import pandas as pd
 from matplotlib.axes import Axes
 
-from src.analytics import calculate_rfm_results
+from core.analytics import calculate_rfm_results
 
 
 class GraphDataChoice:

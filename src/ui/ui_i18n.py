@@ -22,6 +22,19 @@ SUPPORTED_LANG_CODES = [
     "ja",  # Japanese
 ]
 
+LANGUAGE_NAMES = {
+    "en": "English",
+    "ua": "Українська",
+    "ru": "Русский",
+    "de": "Deutsch",
+    "fr": "Français",
+    "es": "Español",
+    "it": "Italiano",
+    "pt": "Português",
+    "zh": "简体中文",
+    "ja": "日本語",
+}
+
 # NOTE: keep keys in sync with ui_main_window.py usage.
 UI_TEXTS: Dict[str, Dict[str, str]] = {
     "en": {

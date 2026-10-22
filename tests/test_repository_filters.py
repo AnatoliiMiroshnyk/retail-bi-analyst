@@ -12,8 +12,8 @@ from __future__ import annotations
 from pathlib import Path
 from datetime import datetime, timedelta
 
-from src.data_loader import DataSourceConfig, DataLoader
-from src.repository import SalesRepository, SalesFilter
+from core.data_loader import DataSourceConfig, DataLoader
+from core.repository import SalesRepository, SalesFilter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
