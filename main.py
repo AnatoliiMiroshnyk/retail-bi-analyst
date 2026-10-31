@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QApplication
 # import system module for accessing command line arguments and exiting application loop
 import sys
 # import MainWindow class from UI module
-from ui.ui_main_window import MainWindow
+from src.ui.ui_main_window import MainWindow
 
 # define main application execution function
 def main() -> None:
@@ -21,7 +21,7 @@ def main() -> None:
     # render and display main window on screen
     window.show()
     # start Qt event loop and terminate Python process with returned exit code on window close
-    sys.exit(app.exec_())
+    sys.exit(app.exec())
 
 # Ensure script only runs main() when executed directly as top-level script
 if __name__ == "__main__":
