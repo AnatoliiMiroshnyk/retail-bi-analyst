@@ -1,221 +1,136 @@
-"""
-Module for loading the data from csv files, Excel workbooks, JSON documents
-and SQL databases (SQLite and others via SQLAlchemy).
-"""
-
+"""Source readers. Preserve lexical identifiers before pandas type inference."""
 from __future__ import annotations
-
+import csv
+import json
+import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, cast
-
-import json
-
+from typing import Optional
 import pandas as pd
-import sqlite3
-
-try:
-    # SQLAlchemy is optional: required only for generic SQL databases
-    from sqlalchemy import create_engine
-    from sqlalchemy.engine import Engine
-except ImportError:  # pragma: no cover - optional dependency
-    create_engine = None
-    Engine = None  # type: ignore[assignment]
+from src.core.validation import DataValidationError, validate_headers
 
 
 @dataclass
 class DataSourceConfig:
-    """
-    Configuration class for the data source.
-
-    Supported source_type values:
-    - 'csv'    : plain delimited text file
-    - 'sqlite' : local SQLite database
-    - 'excel'  : Excel workbook (xls, xlsx)
-    - 'json'   : JSON file with table-like data
-    - 'sql'    : any database supported by SQLAlchemy via connection string
-    """
-
-    # type of data source: 'csv', 'sqlite', 'excel', 'json', 'sql'
     source_type: str
-    # filesystem path pointing to the source file (for csv / excel / json / sqlite)
     path: Optional[Path] = None
-    # optional table name parameter (required when source type is 'sqlite' or sql without explicit query)
     table_name: Optional[str] = None
-    # optional Excel sheet name (if omitted, first sheet will be used)
     excel_sheet: Optional[str] = None
-    # optional JSON pointer (e.g. "data.items") for nested structures
     json_pointer: Optional[str] = None
-    # optional SQLAlchemy connection string for generic SQL databases
     connection_string: Optional[str] = None
-    # optional explicit SQL query; if omitted, "SELECT * FROM {table_name}" is used
     sql_query: Optional[str] = None
 
 
+def open_sqlite_readonly(path):
+    path = Path(path).resolve(strict=True)
+    if not path.is_file():
+        raise ValueError('SQLite path must be an existing file')
+    connection = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)
+    try:
+        connection.execute('PRAGMA query_only=ON')
+    except Exception:
+        connection.close()
+        raise
+    return connection
+
+
 class DataLoader:
-    """
-    Class for loading the data from different sources into a pandas DataFrame.
-    """
-
-    def __init__(self, config: DataSourceConfig) -> None:
-        # store configuration instance
+    def __init__(self, config: DataSourceConfig):
         self.config = config
-        # standardize source type to lowercase to make checks case-insensitive
-        self.config.source_type = self.config.source_type.lower()
-        # validate configuration up-front to fail fast on incorrect parameters
-        self._validate_config()
-
-    def load_data(self) -> pd.DataFrame:
-        """
-        Loads data to pandas dataframe, dispatching to source-specific loaders.
-        """
-        if self.config.source_type == "csv":
-            return self._load_from_csv()
-        elif self.config.source_type == "sqlite":
-            return self._load_from_sqlite()
-        elif self.config.source_type in {"excel", "xlsx"}:
-            return self._load_from_excel()
-        elif self.config.source_type == "json":
-            return self._load_from_json()
-        elif self.config.source_type == "sql":
-            return self._load_from_sql_database()
-        else:
-            raise ValueError(f"Unknown source type: {self.config.source_type}")
-
-    # -------------------------------------------------------------------------
-    # internal helpers for configuration validation and normalization
-    # -------------------------------------------------------------------------
-
-    def _validate_config(self) -> None:
-        """
-        Validate DataSourceConfig according to selected source_type.
-        """
-        stype = self.config.source_type
-
-        # file-based sources must have a path provided
-        if stype in {"csv", "excel", "xlsx", "json", "sqlite"}:
-            if self.config.path is None:
-                raise ValueError(f"Path is required for source type '{stype}'")
-            if not self.config.path.exists():
-                raise FileNotFoundError(f"Source file not found: {self.config.path}")
-
-        # sqlite requires table_name
-        if stype == "sqlite" and not self.config.table_name:
-            raise ValueError("Table name must be provided for SQLite source")
-
-        # generic SQL databases require a connection string
-        if stype == "sql":
-            if not self.config.connection_string:
-                raise ValueError("connection_string must be provided for 'sql' source type")
-            if create_engine is None:
-                raise RuntimeError(
-                    "SQLAlchemy is not installed. Install it with 'pip install sqlalchemy' "
-                    "to use generic SQL database sources."
-                )
+        self.source_type = config.source_type.strip().lower()
+        if self.source_type not in {'csv','excel','xlsx','json','sqlite','sql'}:
+            raise ValueError(f'Unknown source type: {config.source_type}')
+        if self.source_type != 'sql':
+            if config.path is None or not Path(config.path).is_file():
+                raise FileNotFoundError(f'Source file not found: {config.path}')
+        if self.source_type == 'sqlite' and not (config.table_name or config.sql_query):
+            raise ValueError('Specify SQLite table name or query')
+        if self.source_type == 'sql' and not config.connection_string:
+            raise ValueError('connection_string is required')
 
     @staticmethod
-    def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Standardize column names:
-        - convert to string
-        - strip leading/trailing whitespace
-        - convert to lowercase
-        """
-        normalized = df.copy()
-        normalized.columns = [str(c).strip().lower() for c in normalized.columns]
-        return normalized
+    def _normalize_dataframe(df):
+        df = df.copy(deep=True)
+        df.columns = validate_headers(df.columns)
+        return df
 
-    # -------------------------------------------------------------------------
-    # concrete loaders for supported source types
-    # -------------------------------------------------------------------------
+    def load_data(self):
+        reader = {'csv':self._load_from_csv, 'excel':self._load_from_excel,
+                  'xlsx':self._load_from_excel, 'json':self._load_from_json,
+                  'sqlite':self._load_from_sqlite, 'sql':self._load_from_sql_database}[self.source_type]
+        return self._normalize_dataframe(reader())
 
-    def _load_from_csv(self) -> pd.DataFrame:
-        """
-        Loads data from CSV to pandas DataFrame.
-        """
-        df = cast(pd.DataFrame, pd.read_csv(self.config.path))
-        return self._normalize_dataframe(df)
+    def _load_from_csv(self):
+        with Path(self.config.path).open(encoding='utf-8-sig', newline='') as stream:
+            reader = csv.reader(stream, strict=True)
+            header = next(reader, [])
+            validate_headers(header)
+            for position, row in enumerate(reader, start=2):
+                if len(row) != len(header):
+                    raise DataValidationError(f'CSV record {position}: expected {len(header)} cells, got {len(row)} (blank rows are not discarded)')
+        return pd.read_csv(self.config.path, dtype=str, keep_default_na=False, encoding='utf-8-sig')
 
-    def _load_from_excel(self) -> pd.DataFrame:
-        """
-        Loads data from Excel workbook to pandas DataFrame.
+    def _load_from_excel(self):
+        sheet = self.config.excel_sheet if self.config.excel_sheet is not None else 0
+        # header=None prevents pandas from silently renaming duplicate headers.
+        raw = pd.read_excel(self.config.path, sheet_name=sheet, header=None, dtype=object, keep_default_na=False)
+        if raw.empty: raise DataValidationError('Empty Excel sheet')
+        validate_headers(raw.iloc[0].tolist())
+        frame = raw.iloc[1:].reset_index(drop=True)
+        frame.columns = raw.iloc[0].tolist()
+        return frame
 
-        Uses pandas.read_excel internally, which relies on an Excel engine
-        such as openpyxl or xlrd depending on file format.
-        """
-        sheet = self.config.excel_sheet or 0  # default: first sheet by position
-        df = cast(pd.DataFrame, pd.read_excel(self.config.path, sheet_name=sheet))
-        return self._normalize_dataframe(df)
-
-    def _load_from_json(self) -> pd.DataFrame:
-        """
-        Loads data from JSON file to pandas DataFrame.
-
-        For simple tabular JSON (records/columns orientation) pandas.read_json is used.
-        For nested JSON structures json_pointer (dot separated keys) can be provided,
-        in which case the loader will traverse the object and build a DataFrame
-        from the nested list/dict.
-        """
+    def _load_from_json(self):
+        def pairs(items):
+            result = {}
+            for key, value in items:
+                if key in result: raise DataValidationError(f'Duplicate JSON key: {key}')
+                result[key] = value
+            return result
+        obj = json.loads(Path(self.config.path).read_text(encoding='utf-8-sig'), object_pairs_hook=pairs)
         if self.config.json_pointer:
-            # nested JSON: traverse by dot-separated keys
-            text = self.config.path.read_text(encoding="utf-8")
-            obj = json.loads(text)
+            for key in self.config.json_pointer.split('.'):
+                if not isinstance(obj, dict) or key not in obj:
+                    raise DataValidationError(f'JSON path not found: {self.config.json_pointer}')
+                obj = obj[key]
+        if not isinstance(obj, (dict,list)):
+            raise DataValidationError('JSON root must be a records array or column mapping')
+        return pd.DataFrame(obj)
 
-            for key in self.config.json_pointer.split("."):
-                if not isinstance(obj, dict):
-                    raise ValueError(
-                        f"Cannot apply JSON pointer '{self.config.json_pointer}': "
-                        f"intermediate value is not a dict (at key '{key}')"
-                    )
-                obj = obj.get(key)
+    def _read_sqlite(self, path):
+        with closing(open_sqlite_readonly(path)) as connection:
+            if self.config.sql_query:
+                # query_only+mode=ro also protect custom queries against mutation.
+                return pd.read_sql_query(self.config.sql_query, connection)
+            tables = {row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type IN ('table','view')")}
+            name = self.config.table_name
+            if name not in tables:
+                raise ValueError(f'Unknown SQLite table/view: {name!r}')
+            identifier = '"' + name.replace('"','""') + '"'
+            return pd.read_sql_query('SELECT * FROM ' + identifier, connection)
 
-            df = pd.DataFrame(obj)
-        else:
-            # flat JSON with records/columns handled directly by pandas
-            df = cast(pd.DataFrame, pd.read_json(self.config.path))
+    def _load_from_sqlite(self):
+        return self._read_sqlite(self.config.path)
 
-        return self._normalize_dataframe(df)
-
-    def _load_from_sqlite(self) -> pd.DataFrame:
-        """
-        Loads data from sqlite to pandas DataFrame.
-        """
-        assert self.config.path is not None
-        assert self.config.table_name is not None
-
-        conn = sqlite3.connect(self.config.path)
+    def _load_from_sql_database(self):
+        from sqlalchemy import create_engine, inspect, text
+        from sqlalchemy.engine import make_url
+        url = make_url(self.config.connection_string)
+        if url.get_backend_name() == 'sqlite':
+            if not url.database or url.database == ':memory:':
+                raise ValueError('SQLite source must be an existing file')
+            return self._read_sqlite(Path(url.database))
+        engine = create_engine(url)
         try:
-            query = f"SELECT * FROM {self.config.table_name}"
-            df = pd.read_sql_query(query, conn)
-            return self._normalize_dataframe(df)
+            with engine.connect() as connection:
+                if self.config.sql_query:
+                    return pd.read_sql_query(text(self.config.sql_query), connection)
+                allowed = set(inspect(connection).get_table_names()) | set(inspect(connection).get_view_names())
+                if self.config.table_name not in allowed:
+                    raise ValueError(f'Unknown SQL table/view: {self.config.table_name!r}')
+                identifier = engine.dialect.identifier_preparer.quote(self.config.table_name)
+                return pd.read_sql_query(text('SELECT * FROM ' + identifier), connection)
         finally:
-            conn.close()
-
-    def _load_from_sql_database(self) -> pd.DataFrame:
-        """
-        Loads data from a generic SQL database using SQLAlchemy.
-
-        The connection_string is expected to be a valid SQLAlchemy URL,
-        e.g.:
-        - sqlite:///path/to/file.db
-        - postgresql+psycopg2://user:password@host:5432/dbname
-        - mssql+pyodbc://user:password@DSN
-        """
-        assert self.config.connection_string is not None
-
-        engine: Engine = create_engine(self.config.connection_string)  # type: ignore[call-arg]
-
-        # choose query: explicit sql_query has priority, otherwise use table_name
-        if self.config.sql_query:
-            query = self.config.sql_query
-        elif self.config.table_name:
-            query = f"SELECT * FROM {self.config.table_name}"
-        else:
-            raise ValueError(
-                "Either sql_query or table_name must be provided for 'sql' source type"
-            )
-
-        with engine.connect() as conn:
-            df = pd.read_sql_query(query, conn)
-
-        return self._normalize_dataframe(df)
+            engine.dispose()
