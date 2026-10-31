@@ -2,72 +2,36 @@
 
 from __future__ import annotations
 
-from datetime import datetime, time
+import io
+import logging
 from pathlib import Path
 from typing import Dict, Optional
 
 import pandas as pd
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PySide6.QtCore import QDate, Qt
-from PySide6.QtGui import (
-    QAction,
-    QCloseEvent,
-    QGuiApplication,
-    QStandardItem,
-    QStandardItemModel,
-    QTextDocument,
-)
-from PySide6.QtWidgets import (
-    QComboBox,
-    QDateEdit,
-    QDoubleSpinBox,
-    QFileDialog,
-    QHBoxLayout,
-    QInputDialog,
-    QLabel,
-    QMainWindow,
-    QMessageBox,
-    QPushButton,
-    QTabWidget,
-    QTableView,
-    QTextBrowser,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtCore import QDate, Qt, Slot
+from PySide6.QtGui import QCloseEvent, QStandardItem, QStandardItemModel
+from PySide6.QtWidgets import QComboBox, QFileDialog, QInputDialog, QMainWindow, QMessageBox
 
-try:
-    import markdown as markdown_renderer
-except ImportError:
-    markdown_renderer = None
-
-from core.analytics import (
-    KPIResult,
-    RFMScores,
-    calculate_kpi_results,
-    calculate_rfm_results,
-)
+from src.core.analytics import KPIResult, RFMScores
 from src.config import APP_NAME, REPORT_FILENAME, REPORT_HTML_FILENAME, EXCEL_REPORT_FILENAME
-from core.data_loader import DataLoader, DataSourceConfig
-from core.graphs import (
-    GraphDataChoice,
-    GraphType,
-    build_graph,
-    get_available_graph_data_choices,
-    has_graph_data,
-)
-from reports.report_generator import (
-    generate_excel_report,
-    generate_html_report,
-    generate_markdown_report,
-)
-from core.repository import DataValidationError, SalesFilter, SalesRepository
-from ui.ui_i18n import SUPPORTED_LANG_CODES, LANGUAGE_NAMES, tr
-from ui.ui_settings import UiSettings, load_settings, save_settings
-from ui.ui_theme import build_stylesheet
+from src.core.data_loader import DataSourceConfig
+from src.core.graphs import GraphDataChoice, GraphType, build_graph, get_available_graph_data_choices, has_graph_data
+from src.reports.report_generator import generate_excel_report, generate_html_report, generate_markdown_report
+from src.core.repository import SalesFilter, SalesRepository
+from src.ui.ui_i18n import SUPPORTED_LANG_CODES, LANGUAGE_NAMES, tr
+from src.ui.ui_settings import UiSettings, load_settings, save_settings
+from src.ui.ui_theme import build_stylesheet
+from src.ui.ui_layout import MainWindowView
+from src.ui.table_items import ValueItem
+from src.ui.workers import TaskThread
+from src.core.application import prepare_import, prepare_view
+from src.reports.safety import write_text_report, atomic_write
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+import matplotlib.image as mpimg
 
 
-class MainWindow(QMainWindow):
+class MainWindow(MainWindowView, QMainWindow):
     """Main application window connected to loading, analytics and reports."""
 
     def __init__(self) -> None:
@@ -83,15 +47,26 @@ class MainWindow(QMainWindow):
         self._current_df: Optional[pd.DataFrame] = None
         self._current_kpi: Optional[KPIResult] = None
         self._current_rfm: Dict[str, RFMScores] = {}
+        self._prepared = None
+        self._task = None
+        self._busy = False
+        self._task_success = None
+        self._revision = 0
+        self._graph_revision = -1
+        self._graph_png = None
+        self._active_controls = None
 
         self.setWindowTitle(APP_NAME)
         self._set_initial_geometry()
         self._init_menu()
         self._init_ui()
+        self._fill_filter_placeholders()
         self._connect_signals()
+        self._active_controls = self._capture_controls()
         self._apply_theme()
         self._apply_language()
         self._refresh_graph_controls()
+        self._update_enabled()
 
     @staticmethod
     def _validated_theme(theme: str) -> str:
@@ -103,218 +78,6 @@ class MainWindow(QMainWindow):
             return "ua"
         return language if language in SUPPORTED_LANG_CODES else "en"
 
-    def _set_initial_geometry(self) -> None:
-        screen = QGuiApplication.primaryScreen()
-        if screen is None:
-            self.resize(1280, 800)
-            return
-        geometry = screen.availableGeometry()
-        width = min(max(1100, int(geometry.width() * 0.92)), geometry.width())
-        height = min(max(720, int(geometry.height() * 0.90)), geometry.height())
-        self.resize(width, height)
-        self.move(
-            geometry.x() + (geometry.width() - width) // 2,
-            geometry.y() + (geometry.height() - height) // 2,
-        )
-
-    # ------------------------------------------------------------------
-    # Menu
-    # ------------------------------------------------------------------
-
-    def _init_menu(self) -> None:
-        menubar = self.menuBar()
-
-        self.file_menu = menubar.addMenu("")
-        self.import_csv_action = QAction(self)
-        self.import_excel_action = QAction(self)
-        self.import_json_action = QAction(self)
-        self.import_sql_action = QAction(self)
-        self.exit_action = QAction(self)
-        self.file_menu.addActions(
-            [
-                self.import_csv_action,
-                self.import_excel_action,
-                self.import_json_action,
-                self.import_sql_action,
-            ]
-        )
-        self.file_menu.addSeparator()
-        self.file_menu.addAction(self.exit_action)
-
-        self.report_menu = menubar.addMenu("")
-        self.generate_report_action = QAction(self)
-        self.generate_html_action = QAction(self)
-        self.generate_excel_action = QAction(self)
-        self.report_menu.addActions(
-            [
-                self.generate_report_action,
-                self.generate_html_action,
-                self.generate_excel_action,
-            ]
-        )
-
-        self.settings_menu = menubar.addMenu("")
-        self.theme_light_action = QAction(self)
-        self.theme_dark_action = QAction(self)
-        self.font_inc_action = QAction(self)
-        self.font_dec_action = QAction(self)
-        self.language_action = QAction(self)
-        self.theme_light_action.setCheckable(True)
-        self.theme_dark_action.setCheckable(True)
-        self.settings_menu.addActions(
-            [self.theme_light_action, self.theme_dark_action]
-        )
-        self.settings_menu.addSeparator()
-        self.settings_menu.addActions([self.font_inc_action, self.font_dec_action])
-        self.settings_menu.addSeparator()
-        self.settings_menu.addAction(self.language_action)
-
-    # ------------------------------------------------------------------
-    # User interface
-    # ------------------------------------------------------------------
-
-    def _init_ui(self) -> None:
-        central = QWidget(self)
-        central.setObjectName("centralWidget")
-        main_layout = QHBoxLayout(central)
-        main_layout.setContentsMargins(12, 12, 12, 12)
-        main_layout.setSpacing(12)
-
-        self.filters_panel = QWidget()
-        self.filters_panel.setMinimumWidth(220)
-        self.filters_panel.setMaximumWidth(300)
-        filters_layout = QVBoxLayout(self.filters_panel)
-        filters_layout.setContentsMargins(8, 8, 8, 8)
-        filters_layout.setSpacing(6)
-
-        self.filters_label = QLabel()
-        self.filters_label.setStyleSheet("font-weight: 600;")
-        filters_layout.addWidget(self.filters_label)
-
-        self.label_date_from = QLabel()
-        self.date_from_edit = QDateEdit()
-        self.date_from_edit.setCalendarPopup(True)
-        self.date_from_edit.setDisplayFormat("yyyy-MM-dd")
-        self.date_from_edit.setDate(QDate.currentDate().addMonths(-1))
-        filters_layout.addWidget(self.label_date_from)
-        filters_layout.addWidget(self.date_from_edit)
-
-        self.label_date_to = QLabel()
-        self.date_to_edit = QDateEdit()
-        self.date_to_edit.setCalendarPopup(True)
-        self.date_to_edit.setDisplayFormat("yyyy-MM-dd")
-        self.date_to_edit.setDate(QDate.currentDate())
-        filters_layout.addWidget(self.label_date_to)
-        filters_layout.addWidget(self.date_to_edit)
-
-        self.label_category = QLabel()
-        self.category_combo = QComboBox()
-        filters_layout.addWidget(self.label_category)
-        filters_layout.addWidget(self.category_combo)
-
-        self.label_customer = QLabel()
-        self.customer_combo = QComboBox()
-        filters_layout.addWidget(self.label_customer)
-        filters_layout.addWidget(self.customer_combo)
-
-        self.label_min_total = QLabel()
-        self.min_total_spin = self._create_money_spinbox()
-        filters_layout.addWidget(self.label_min_total)
-        filters_layout.addWidget(self.min_total_spin)
-
-        self.label_max_total = QLabel()
-        self.max_total_spin = self._create_money_spinbox()
-        filters_layout.addWidget(self.label_max_total)
-        filters_layout.addWidget(self.max_total_spin)
-
-        self.apply_filters_btn = QPushButton()
-        self.reset_filters_btn = QPushButton()
-        filters_layout.addSpacing(8)
-        filters_layout.addWidget(self.apply_filters_btn)
-        filters_layout.addWidget(self.reset_filters_btn)
-        filters_layout.addStretch(1)
-
-        self.tabs = QTabWidget()
-        self.tabs.setDocumentMode(False)
-
-        self.data_table = self._create_table()
-        data_tab = QWidget()
-        data_layout = QVBoxLayout(data_tab)
-        data_layout.setContentsMargins(10, 10, 10, 10)
-        data_layout.addWidget(self.data_table)
-        self.tabs.addTab(data_tab, "")
-
-        self.kpi_table = self._create_table()
-        self.rfm_table = self._create_table()
-        analytics_tab = QWidget()
-        analytics_layout = QVBoxLayout(analytics_tab)
-        analytics_layout.setContentsMargins(10, 10, 10, 10)
-        analytics_layout.setSpacing(8)
-        self.kpi_title_label = QLabel()
-        self.kpi_title_label.setStyleSheet("font-weight: 600;")
-        self.rfm_title_label = QLabel()
-        self.rfm_title_label.setStyleSheet("font-weight: 600;")
-        analytics_layout.addWidget(self.kpi_title_label)
-        analytics_layout.addWidget(self.kpi_table, 1)
-        analytics_layout.addWidget(self.rfm_title_label)
-        analytics_layout.addWidget(self.rfm_table, 2)
-        self.tabs.addTab(analytics_tab, "")
-
-        self.report_view = QTextBrowser()
-        self.report_view.setOpenExternalLinks(True)
-        self.report_view.setReadOnly(True)
-        report_tab = QWidget()
-        report_layout = QVBoxLayout(report_tab)
-        report_layout.setContentsMargins(10, 10, 10, 10)
-        report_layout.addWidget(self.report_view)
-        self.tabs.addTab(report_tab, "")
-
-        graphs_tab = QWidget()
-        graphs_layout = QVBoxLayout(graphs_tab)
-        graphs_layout.setContentsMargins(10, 10, 10, 10)
-        graph_controls = QHBoxLayout()
-        self.label_graph_data = QLabel()
-        self.graph_data_combo = QComboBox()
-        self.label_graph_type = QLabel()
-        self.graph_type_combo = QComboBox()
-        self.refresh_graph_btn = QPushButton()
-        graph_controls.addWidget(self.label_graph_data)
-        graph_controls.addWidget(self.graph_data_combo, 1)
-        graph_controls.addWidget(self.label_graph_type)
-        graph_controls.addWidget(self.graph_type_combo, 1)
-        graph_controls.addWidget(self.refresh_graph_btn)
-        graphs_layout.addLayout(graph_controls)
-
-        self.graph_canvas = FigureCanvas(Figure(figsize=(9, 6)))
-        self.graph_axes = self.graph_canvas.figure.add_subplot(111)
-        graphs_layout.addWidget(self.graph_canvas, 1)
-        self.tabs.addTab(graphs_tab, "")
-
-        main_layout.addWidget(self.filters_panel)
-        main_layout.addWidget(self.tabs, 1)
-        self.setCentralWidget(central)
-        self.statusBar()
-
-        self._fill_filter_placeholders()
-
-    @staticmethod
-    def _create_money_spinbox() -> QDoubleSpinBox:
-        spin = QDoubleSpinBox()
-        spin.setRange(0.0, 1_000_000_000.0)
-        spin.setDecimals(2)
-        spin.setSingleStep(10.0)
-        spin.setSpecialValueText("—")
-        return spin
-
-    @staticmethod
-    def _create_table() -> QTableView:
-        table = QTableView()
-        table.setSortingEnabled(True)
-        table.setAlternatingRowColors(True)
-        table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
-        table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
-        table.horizontalHeader().setStretchLastSection(True)
-        return table
 
     def _connect_signals(self) -> None:
         self.import_csv_action.triggered.connect(self._on_import_csv)
@@ -336,6 +99,8 @@ class MainWindow(QMainWindow):
         self.apply_filters_btn.clicked.connect(self._on_apply_filters)
         self.reset_filters_btn.clicked.connect(self._on_reset_filters)
         self.refresh_graph_btn.clicked.connect(self._on_refresh_graph)
+        self.save_graph_btn.clicked.connect(self._on_save_graph)
+        self.graph_type_combo.currentTextChanged.connect(self._invalidate_graph)
         self.graph_data_combo.currentTextChanged.connect(
             self._on_graph_data_changed
         )
@@ -348,6 +113,7 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(build_stylesheet(self._theme, self._font_size_pt))
         self.theme_light_action.setChecked(self._theme == "light")
         self.theme_dark_action.setChecked(self._theme == "dark")
+        self._invalidate_graph()
         self._sync_plot_theme(redraw=True)
         self._update_report_preview()
 
@@ -418,36 +184,19 @@ class MainWindow(QMainWindow):
         self._settings.theme = self._theme
         self._settings.font_size_pt = self._font_size_pt
         self._settings.language_code = self._language_code
-        save_settings(self._settings)
+        try:
+            save_settings(self._settings)
+        except Exception as error:
+            self._show_error(f'Settings were not saved: {error}')
 
     # ------------------------------------------------------------------
     # Loading data
     # ------------------------------------------------------------------
 
     def _load_dataframe_with_config(self, config: DataSourceConfig) -> None:
-        try:
-            df = DataLoader(config).load_data()
-            repo = SalesRepository(df)
-        except FileNotFoundError as error:
-            self._show_error(str(error))
-            return
-        except DataValidationError as error:
-            self._show_error(
-                tr(self._language_code, "msg_invalid_data").format(error=error)
-            )
-            return
-        except Exception as error:
-            self._show_error(str(error))
-            return
-
-        self._repo = repo
-        self._current_df = repo.raw.copy()
-        self._current_filter = None
-        self._set_date_range_from_data()
-        self._refresh_all_views()
-        self.statusBar().showMessage(
-            f"{len(self._current_df):,} rows loaded", 5000
-        )
+        self._run_task(lambda: prepare_import(config),
+                       lambda result: self._commit_view(result[1], result[0], None, True),
+                       'Import, validation and analytics', failure_controls=self._capture_controls())
 
     def _on_import_csv(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -566,7 +315,8 @@ class MainWindow(QMainWindow):
 
         self._load_dataframe_with_config(
             DataSourceConfig(
-                source_type="sql",
+                source_type="sqlite" if engine == "SQLite" else "sql",
+                path=Path(path) if engine == "SQLite" else None,
                 connection_string=connection_string,
                 table_name=table_name.strip() or None,
                 sql_query=sql_query.strip() or None,
@@ -589,65 +339,60 @@ class MainWindow(QMainWindow):
         self.date_to_edit.setDate(QDate(last.year, last.month, last.day))
 
     def _build_filter(self) -> SalesFilter:
-        start = self.date_from_edit.date().toPython()
-        end = self.date_to_edit.date().toPython()
-        if start > end:
-            raise ValueError("The start date must not be later than the end date.")
-
-        min_total = self.min_total_spin.value()
-        max_total = self.max_total_spin.value()
-        if min_total > 0 and max_total > 0 and min_total > max_total:
-            raise ValueError("Minimum total price must not exceed maximum total price.")
-
-        return SalesFilter(
-            date_from=datetime.combine(start, time.min),
-            date_to=datetime.combine(end, time.max),
+        flt = SalesFilter.for_calendar_days(
+            self.date_from_edit.date().toPython(), self.date_to_edit.date().toPython(),
             category=self.category_combo.currentData(),
             customer_id=self.customer_combo.currentData(),
-            min_total_price=min_total if min_total > 0 else None,
-            max_total_price=max_total if max_total > 0 else None,
+            min_total_price=self.min_total_spin.value() if self.min_total_spin.value() > 0 else None,
+            max_total_price=self.max_total_spin.value() if self.max_total_spin.value() > 0 else None,
         )
+        if flt.min_total_price is not None and flt.max_total_price is not None and flt.min_total_price > flt.max_total_price:
+            raise ValueError('Minimum total must not exceed maximum total')
+        return flt
 
     def _on_apply_filters(self) -> None:
-        if self._repo is None:
-            self._show_info(tr(self._language_code, "msg_no_repo"))
+        if self._repo is None or self._busy:
             return
         try:
-            self._current_filter = self._build_filter()
-            self._current_df = self._repo.filtered(self._current_filter).copy()
+            flt = self._build_filter()
         except Exception as error:
+            self._restore_controls(self._active_controls)
             self._show_error(str(error))
             return
-        self._refresh_data_outputs()
+        repository = self._repo
+        self._run_task(lambda: prepare_view(repository.filtered(flt)),
+                       lambda view: self._commit_view(view, repository, flt, False),
+                       'Filtering and analytics')
 
     def _on_reset_filters(self) -> None:
-        if self._repo is None:
+        if self._repo is None or self._busy:
             return
-        self._set_date_range_from_data()
-        self.category_combo.setCurrentIndex(0)
-        self.customer_combo.setCurrentIndex(0)
-        self.min_total_spin.setValue(0.0)
-        self.max_total_spin.setValue(0.0)
-        self._current_filter = None
-        self._current_df = self._repo.raw.copy()
-        self._refresh_data_outputs()
+        repository = self._repo
+        self._run_task(lambda: prepare_view(repository.raw),
+                       lambda view: self._commit_view(view, repository, None, True),
+                       'Reset and analytics')
 
     def _refresh_all_views(self) -> None:
-        self._update_category_combo()
-        self._update_customer_combo()
-        self._refresh_data_outputs()
+        if self._repo is None or self._busy:
+            return
+        repository, flt = self._repo, self._current_filter
+        self._run_task(lambda: prepare_view(repository.filtered(flt)),
+                       lambda view: self._commit_view(view, repository, flt, False),
+                       'Refresh and analytics')
 
     def _refresh_data_outputs(self) -> None:
-        self._populate_data_table()
-        self._update_analytics()
-        self._update_report_preview()
-        self._refresh_graph_controls()
+        self._refresh_all_views()
 
     def _fill_filter_placeholders(self) -> None:
         self.category_combo.clear()
         self.customer_combo.clear()
         self.category_combo.addItem("—", None)
         self.customer_combo.addItem("—", None)
+        if self._repo is not None:
+            for value in self._repo.unique_categories():
+                self.category_combo.addItem(value, value)
+            for value in self._repo.unique_customers():
+                self.customer_combo.addItem(value, value)
 
     def _refresh_filter_combo_texts(self) -> None:
         if self.category_combo.count() > 0:
@@ -683,130 +428,35 @@ class MainWindow(QMainWindow):
         combo.setCurrentIndex(index if index >= 0 else 0)
 
     def _populate_data_table(self) -> None:
-        df = self._current_df
-        if df is None or df.empty:
-            self.data_table.setModel(QStandardItemModel(0, 0, self))
-            return
-
-        model = QStandardItemModel(df.shape[0], df.shape[1], self)
-        model.setHorizontalHeaderLabels([str(column) for column in df.columns])
-        for row_index, row in enumerate(df.itertuples(index=False, name=None)):
-            for column_index, value in enumerate(row):
-                model.setItem(row_index, column_index, self._make_item(value))
-        self.data_table.setModel(model)
-        self.data_table.resizeColumnsToContents()
+        self.data_table.setModel(self._dataframe_to_model(self._current_df))
 
     @staticmethod
     def _make_item(value: object) -> QStandardItem:
-        if pd.isna(value):
-            return QStandardItem("")
-        if isinstance(value, pd.Timestamp):
-            return QStandardItem(value.strftime("%Y-%m-%d %H:%M:%S"))
-        item = QStandardItem()
-        if isinstance(value, bool):
-            item.setData(value, Qt.ItemDataRole.DisplayRole)
-        elif isinstance(value, int):
-            item.setData(value, Qt.ItemDataRole.DisplayRole)
-        elif isinstance(value, float):
-            item.setData(round(value, 4), Qt.ItemDataRole.DisplayRole)
-        else:
-            item.setText(str(value))
-        return item
+        return ValueItem(value)
 
     # ------------------------------------------------------------------
     # Analytics
     # ------------------------------------------------------------------
 
     def _update_analytics(self) -> None:
-        df = self._current_df
-        if df is None or df.empty:
-            self._current_kpi = None
-            self._current_rfm = {}
-            self.kpi_table.setModel(QStandardItemModel(0, 0, self))
-            self.rfm_table.setModel(QStandardItemModel(0, 0, self))
-            return
-
-        try:
-            self._current_kpi = calculate_kpi_results(df)
-            self._current_rfm = calculate_rfm_results(df)
-        except Exception as error:
-            self._current_kpi = None
-            self._current_rfm = {}
-            self._show_error(str(error))
-            return
-
-        self._populate_kpi_table(self._current_kpi)
-        self._populate_rfm_table(self._current_rfm)
+        # Keep compatibility, but do not maintain a second non-atomic update path.
+        self._refresh_all_views()
 
     def _populate_kpi_table(self, kpi: KPIResult) -> None:
-        rows = [
-            ("Total revenue", f"{kpi.total_revenue:,.2f}"),
-            ("Average bill", f"{kpi.avg_ticket:,.2f}"),
-            ("Transactions", str(kpi.transactions_count)),
-            ("Unique customers", str(kpi.unique_customers)),
-            ("Avg orders per customer", f"{kpi.avg_transactions_per_customer:.2f}"),
-            ("Revenue per customer", f"{kpi.revenue_per_customer:,.2f}"),
-            ("New customers", str(kpi.new_customers_count)),
-            ("Returning customers", str(kpi.returning_customers_count)),
-            ("Repeat-customer share", f"{kpi.repeat_customer_share:.1%}"),
-            ("Maximum bill", f"{kpi.max_ticket:,.2f}"),
-            ("Minimum bill", f"{kpi.min_ticket:,.2f}"),
-            ("Median bill", f"{kpi.median_ticket:,.2f}"),
-            ("Bill standard deviation", f"{kpi.std_ticket:,.2f}"),
-            ("Observation period, days", str(kpi.days_span)),
-            ("Revenue per day", f"{kpi.revenue_per_day:,.2f}"),
-            ("Revenue per month", f"{kpi.revenue_per_month:,.2f}"),
-        ]
-        model = QStandardItemModel(len(rows), 2, self)
-        model.setHorizontalHeaderLabels(["Metric", "Value"])
-        for row, (name, value) in enumerate(rows):
-            model.setItem(row, 0, QStandardItem(name))
-            model.setItem(row, 1, QStandardItem(value))
-        self.kpi_table.setModel(model)
-        self.kpi_table.resizeColumnsToContents()
+        self.kpi_table.setModel(self._kpi_to_model(kpi))
 
     def _populate_rfm_table(self, rfm: Dict[str, RFMScores]) -> None:
-        model = QStandardItemModel(len(rfm), 5, self)
-        model.setHorizontalHeaderLabels(
-            ["Customer", "Recency (days)", "Frequency", "Monetary", "Segment"]
-        )
-        for row, (customer_id, scores) in enumerate(rfm.items()):
-            values = [
-                customer_id,
-                scores.recency_days,
-                scores.frequency,
-                round(scores.monetary, 2),
-                scores.segment,
-            ]
-            for column, value in enumerate(values):
-                model.setItem(row, column, self._make_item(value))
-        self.rfm_table.setModel(model)
-        self.rfm_table.resizeColumnsToContents()
+        self.rfm_table.setModel(self._rfm_to_model(rfm))
 
     # ------------------------------------------------------------------
     # Report preview and export
     # ------------------------------------------------------------------
 
     def _update_report_preview(self) -> None:
-        if self._current_kpi is None:
+        if self._prepared is None:
             self.report_view.clear()
             return
-
-        markdown_text = generate_markdown_report(
-            self._current_kpi, self._current_rfm
-        )
-        if markdown_renderer is not None:
-            body = markdown_renderer.markdown(
-                markdown_text,
-                extensions=["tables", "fenced_code"],
-                output_format="html5",
-            )
-            self.report_view.setHtml(self._wrap_report_html(body))
-            return
-
-        document = QTextDocument(self.report_view)
-        document.setMarkdown(markdown_text)
-        self.report_view.setDocument(document)
+        self.report_view.setHtml(self._wrap_report_html(self._prepared.preview_html))
 
     def _wrap_report_html(self, body: str) -> str:
         if self._theme == "dark":
@@ -831,74 +481,19 @@ code {{ background:{stripe}; padding:2px 4px; border-radius:3px; }}
 </style></head><body>{body}</body></html>"""
 
     def _reports_available(self) -> bool:
-        if self._current_kpi is None or self._current_df is None:
-            self._show_info(tr(self._language_code, "msg_no_repo"))
+        if self._current_kpi is None or self._current_df is None or self._current_df.empty:
+            self._show_info(tr(self._language_code, 'msg_no_repo'))
             return False
         return True
 
     def _on_generate_report(self) -> None:
-        if not self._reports_available():
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            self.generate_report_action.text(),
-            REPORT_FILENAME,
-            "Markdown (*.md);;All files (*)",
-        )
-        if not path:
-            return
-        try:
-            content = generate_markdown_report(
-                self._current_kpi, self._current_rfm
-            )
-            Path(path).write_text(content, encoding="utf-8")
-            self._show_report_success(path)
-        except Exception as error:
-            self._show_report_error(error)
+        self._export_report('md')
 
     def _on_generate_html_report(self) -> None:
-        if not self._reports_available():
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            self.generate_html_action.text(),
-            REPORT_HTML_FILENAME,
-            "HTML (*.html);;All files (*)",
-        )
-        if not path:
-            return
-        try:
-            content = generate_html_report(
-                self._current_kpi, self._current_rfm, self._current_df
-            )
-            Path(path).write_text(content, encoding="utf-8")
-            self._show_report_success(path)
-        except Exception as error:
-            self._show_report_error(error)
+        self._export_report('html')
 
     def _on_generate_excel_report(self) -> None:
-        if not self._reports_available():
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            self.generate_excel_action.text(),
-            EXCEL_REPORT_FILENAME,
-            "Excel (*.xlsx);;All files (*)",
-        )
-        if not path:
-            return
-        if not path.lower().endswith(".xlsx"):
-            path += ".xlsx"
-        try:
-            generate_excel_report(
-                self._current_kpi,
-                self._current_rfm,
-                self._current_df,
-                Path(path),
-            )
-            self._show_report_success(path)
-        except Exception as error:
-            self._show_report_error(error)
+        self._export_report('xlsx')
 
     def _show_report_success(self, path: str) -> None:
         self._show_info(
@@ -937,48 +532,47 @@ code {{ background:{stripe}; padding:2px 4px; border-radius:3px; }}
             self.graph_axes.clear()
             self._sync_plot_theme(redraw=True)
 
-    def _on_graph_data_changed(self, data_choice: str) -> None:
-        self.graph_type_combo.blockSignals(True)
-        self.graph_type_combo.clear()
-
-        if data_choice == GraphDataChoice.REVENUE_DISTRIBUTION:
-            types = [GraphType.HIST, GraphType.BOX]
-        elif data_choice == GraphDataChoice.CUSTOMERS_BY_SEGMENT:
-            types = [GraphType.BAR, GraphType.PIE, GraphType.LINE]
-        elif data_choice in {
-            GraphDataChoice.REVENUE_BY_DATE,
-            GraphDataChoice.AVG_TICKET_BY_DATE,
-            GraphDataChoice.TRANSACTIONS_BY_DATE,
-        }:
-            types = [GraphType.LINE, GraphType.BAR]
-        elif data_choice == GraphDataChoice.REVENUE_BY_CATEGORY:
-            types = [GraphType.BAR, GraphType.PIE]
-        else:
-            types = [GraphType.LINE, GraphType.BAR, GraphType.PIE]
-
-        self.graph_type_combo.addItems(types)
-        self.graph_type_combo.blockSignals(False)
+    def _on_graph_data_changed(self, text: str) -> None:
+        self._invalidate_graph()
+        self._populate_graph_types(text)
+        self._update_enabled()
 
     def _on_refresh_graph(self) -> None:
-        if self._current_df is None or self._current_df.empty:
-            self._show_info(tr(self._language_code, "msg_no_repo"))
+        if self._busy:
             return
-        if not self.graph_data_combo.currentText() or not self.graph_type_combo.currentText():
+        self._invalidate_graph()
+        if not has_graph_data(self._current_df):
             return
-        try:
-            build_graph(
-                self._current_df,
-                self.graph_data_combo.currentText(),
-                self.graph_type_combo.currentText(),
-                self.graph_axes,
-            )
-            self._sync_plot_theme()
-            self.graph_canvas.figure.tight_layout()
-            self.graph_canvas.draw()
-        except ValueError as error:
-            self._show_info(str(error))
-        except Exception as error:
-            self._show_error(str(error))
+        choice = self.graph_data_combo.currentText()
+        kind = self.graph_type_combo.currentText()
+        frame = self._current_df.copy(deep=True)
+        revision, theme = self._revision, self._theme
+        style_figure = self._style_figure
+        def build():
+            figure = Figure(figsize=(9, 6))
+            FigureCanvasAgg(figure)
+            axes = figure.add_subplot(111)
+            build_graph(frame, choice, kind, axes)
+            style_figure(figure, axes, theme)
+            figure.tight_layout()
+            stream = io.BytesIO()
+            figure.savefig(stream, format='png', dpi=120)
+            return stream.getvalue()
+        def commit(content):
+            if self._revision != revision:
+                raise ValueError('Graph belongs to an outdated dataset')
+            image = mpimg.imread(io.BytesIO(content), format='png')
+            try:
+                self.graph_axes.clear()
+                self.graph_axes.imshow(image)
+                self.graph_axes.set_axis_off()
+                self.graph_canvas.draw()
+            except Exception:
+                self._invalidate_graph()
+                raise
+            self._graph_png = content
+            self._graph_revision = revision
+        self._run_task(build, commit, 'Graph building')
 
     # ------------------------------------------------------------------
     # Settings
@@ -1038,5 +632,284 @@ code {{ background:{stripe}; padding:2px 4px; border-radius:3px; }}
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        self._persist_settings()
+        if self._busy:
+            self.statusBar().showMessage('Wait for the running operation before closing.')
+            event.ignore()
+            return
+        try:
+            self._persist_settings()
+        except Exception as error:
+            self._show_error(f'Settings were not saved: {error}')
         super().closeEvent(event)
+
+    def _capture_controls(self):
+        return (self.date_from_edit.date(), self.date_to_edit.date(),
+                self.category_combo.currentData(), self.customer_combo.currentData(),
+                self.min_total_spin.value(), self.max_total_spin.value())
+
+    def _restore_controls(self, values):
+        if values is None:
+            return
+        first, last, category, customer, minimum, maximum = values
+        self.date_from_edit.setDate(first)
+        self.date_to_edit.setDate(last)
+        self.category_combo.setCurrentIndex(max(0, self.category_combo.findData(category)))
+        self.customer_combo.setCurrentIndex(max(0, self.customer_combo.findData(customer)))
+        self.min_total_spin.setValue(minimum)
+        self.max_total_spin.setValue(maximum)
+
+    def _commit_view(self, prepared, repository, flt, reset):
+        """Stage models off-screen; rollback both domain and widgets on GUI failure."""
+        data_model = self._dataframe_to_model(prepared.frame)
+        kpi_model = self._kpi_to_model(prepared.kpi)
+        rfm_model = self._rfm_to_model(prepared.rfm)
+        if prepared.frame.empty:
+            kpi_model = QStandardItemModel(0, 2, self)
+        old = (self._repo, self._current_df, self._current_kpi, self._current_rfm,
+               self._current_filter, self._prepared, self._revision,
+               self._graph_png, self._graph_revision, self._active_controls)
+        old_html = self.report_view.toHtml()
+        combos = [self.category_combo, self.customer_combo, self.graph_data_combo, self.graph_type_combo]
+        old_combos = [[(combo.itemText(i), combo.itemData(i)) for i in range(combo.count())] for combo in combos]
+        old_indexes = [combo.currentIndex() for combo in combos]
+        graph_combo_enabled = [combo.isEnabled() for combo in combos[2:]]
+        old_models = [table.model() for table in (self.data_table, self.kpi_table, self.rfm_table)]
+        try:
+            self._repo, self._current_df = repository, prepared.frame
+            self._current_kpi, self._current_rfm = prepared.kpi, prepared.rfm
+            self._current_filter, self._prepared = flt, prepared
+            self._revision += 1
+            for table, model in zip((self.data_table,self.kpi_table,self.rfm_table), (data_model,kpi_model,rfm_model)):
+                table.setModel(model)
+            if reset:
+                self._set_date_range_from_data()
+                self._fill_filter_placeholders()
+                self.category_combo.setCurrentIndex(0)
+                self.customer_combo.setCurrentIndex(0)
+                self.min_total_spin.setValue(0)
+                self.max_total_spin.setValue(0)
+            self._update_report_preview()
+            self._invalidate_graph()
+            self._refresh_graph_controls()
+            self._active_controls = self._capture_controls()
+            for old_model in old_models:
+                if old_model is not None:
+                    old_model.deleteLater()
+        except Exception:
+            (self._repo, self._current_df, self._current_kpi, self._current_rfm,
+             self._current_filter, self._prepared, self._revision,
+             self._graph_png, self._graph_revision, self._active_controls) = old
+            for table, model in zip((self.data_table,self.kpi_table,self.rfm_table), old_models):
+                table.setModel(model)
+            # Restore a captured UI snapshot, not the failed update routine.
+            for combo, items, index in zip(combos, old_combos, old_indexes):
+                combo.blockSignals(True)
+                try:
+                    combo.clear()
+                    for text, data in items:
+                        combo.addItem(text, data)
+                    combo.setCurrentIndex(index)
+                finally:
+                    combo.blockSignals(False)
+            for combo, enabled in zip(combos[2:], graph_combo_enabled):
+                combo.setEnabled(enabled)
+            self._restore_controls(self._active_controls)
+            self.report_view.setHtml(old_html)
+            if self._graph_png is not None:
+                image = mpimg.imread(io.BytesIO(self._graph_png), format='png')
+                self.graph_axes.clear()
+                self.graph_axes.imshow(image)
+                self.graph_axes.set_axis_off()
+                self.graph_canvas.draw_idle()
+            else:
+                self.graph_axes.clear()
+                self.graph_axes.set_axis_off()
+                self.graph_canvas.draw_idle()
+            self._update_enabled()
+            for model in (data_model, kpi_model, rfm_model):
+                model.deleteLater()
+            raise
+
+    def _run_task(self, task, success, operation, failure_controls=None):
+        if self._busy:
+            return False
+        self._busy = True
+        self._task_success = success
+        self._failure_controls = self._active_controls if failure_controls is None else failure_controls
+        self._operation = operation
+        self._task = TaskThread(task, self)
+        # QObject slot on MainWindow: Qt queues delivery into the main GUI thread.
+        self._task.finished.connect(self._task_finished, Qt.ConnectionType.QueuedConnection)
+        self.centralWidget().setEnabled(False)
+        self.menuBar().setEnabled(False)
+        self.statusBar().showMessage(operation)
+        self._update_enabled()
+        try:
+            self._task.start()
+        except Exception as error:
+            self._task.deleteLater()
+            self._task = None
+            self._task_success = None
+            self._busy = False
+            self.centralWidget().setEnabled(True)
+            self.menuBar().setEnabled(True)
+            self._restore_controls(self._failure_controls)
+            self._update_enabled()
+            self.statusBar().clearMessage()
+            self._show_error(f'{operation} could not start. Working data were not changed.\n{error}')
+            return False
+        return True
+
+    @Slot()
+    def _task_finished(self):
+        task = self._task
+        try:
+            if task.error is not None:
+                logging.getLogger(__name__).error('%s\n%s', self._operation, task.traceback_text)
+                raise task.error
+            self._task_success(task.result)
+        except Exception as error:
+            self._restore_controls(self._failure_controls)
+            self._show_error(f'{self._operation} failed. No success was recorded.\n{error}')
+        finally:
+            self._busy = False
+            self._task = None
+            self._task_success = None
+            task.deleteLater()
+            self.centralWidget().setEnabled(True)
+            self.menuBar().setEnabled(True)
+            self._update_enabled()
+            self.statusBar().clearMessage()
+
+    def _invalidate_graph(self, *args):
+        self._graph_png = None
+        self._graph_revision = -1
+        if hasattr(self, 'graph_axes'):
+            self.graph_axes.clear()
+            self.graph_axes.set_axis_off()
+            self.graph_canvas.draw_idle()
+        self._update_enabled()
+
+    def _update_enabled(self):
+        available = has_graph_data(self._current_df)
+        active = available and not self._busy
+        for action in (self.generate_report_action, self.generate_html_action, self.generate_excel_action):
+            action.setEnabled(active)
+        for button in (self.apply_filters_btn, self.reset_filters_btn):
+            button.setEnabled(self._repo is not None and not self._busy)
+        self.refresh_graph_btn.setEnabled(active and bool(self.graph_data_combo.count()) and bool(self.graph_type_combo.count()))
+        self.save_graph_btn.setEnabled(active and self._graph_png is not None and self._graph_revision == self._revision)
+
+    @staticmethod
+    def _style_figure(figure, axes, theme):
+        bg, text, grid = ('#20242b','#e5e7eb','#3a414b') if theme == 'dark' else ('#ffffff','#172033','#d8e0e9')
+        figure.set_facecolor(bg)
+        axes.set_facecolor(bg)
+        axes.title.set_color(text)
+        axes.xaxis.label.set_color(text)
+        axes.yaxis.label.set_color(text)
+        axes.tick_params(axis='both', colors=text)
+        for label in axes.texts:
+            label.set_color(text)
+        for spine in axes.spines.values():
+            spine.set_color(grid)
+        axes.grid(color=grid, alpha=.35)
+
+    def _on_save_graph(self):
+        if self._busy:
+            return
+        if self._graph_png is None or self._graph_revision != self._revision:
+            self._show_error('Build a current graph successfully before saving.')
+            return
+        path, _ = QFileDialog.getSaveFileName(self, 'Save graph', 'graph.png', 'PNG (*.png)')
+        if not path:
+            return
+        if not path.lower().endswith('.png'):
+            path += '.png'
+        content = self._graph_png
+        def write():
+            atomic_write(Path(path), lambda target: target.write_bytes(content))
+            return path
+        self._run_task(write, lambda result: self._show_info(f'Graph saved: {result}'), 'Graph writing')
+
+    def _export_report(self, kind):
+        if self._busy or not self._reports_available():
+            return
+        defaults = {'md':REPORT_FILENAME, 'html':REPORT_HTML_FILENAME, 'xlsx':EXCEL_REPORT_FILENAME}
+        patterns = {'md':'Markdown (*.md)', 'html':'HTML (*.html)', 'xlsx':'Excel (*.xlsx)'}
+        path, _ = QFileDialog.getSaveFileName(self, 'Save report', defaults[kind], patterns[kind])
+        if not path:
+            return
+        if not path.lower().endswith('.'+kind):
+            path += '.'+kind
+        prepared = self._prepared
+        def write():
+            # Generate again within the protected export transaction. Writing occurs
+            # only after generation succeeds, to a same-directory temporary file.
+            if kind == 'md':
+                content = generate_markdown_report(prepared.kpi, prepared.rfm)
+                write_text_report(Path(path), content)
+            elif kind == 'html':
+                content = generate_html_report(prepared.kpi, prepared.rfm, prepared.frame)
+                write_text_report(Path(path), content)
+            else:
+                generate_excel_report(prepared.kpi, prepared.rfm, prepared.frame, Path(path))
+            return path
+        self._run_task(write, lambda result: self._show_info(f'Report saved: {result}'), 'Report generation and writing')
+
+    def _dataframe_to_model(self, frame):
+        if frame is None:
+            return QStandardItemModel(0, 0, self)
+        model = QStandardItemModel(len(frame), len(frame.columns), self)
+        model.setHorizontalHeaderLabels([str(column) for column in frame.columns])
+        for row, values in enumerate(frame.itertuples(index=False, name=None)):
+            for column, value in enumerate(values):
+                model.setItem(row, column, ValueItem(value))
+        return model
+
+    def _kpi_to_model(self, kpi):
+        definitions = [
+            ('Total revenue','total_revenue', ',.2f'),
+            ('Average bill','avg_ticket', ',.2f'),
+            ('Transactions','transactions_count','d'),
+            ('Unique customers','unique_customers','d'),
+            ('Avg orders per customer','avg_transactions_per_customer','.2f'),
+            ('Revenue per customer','revenue_per_customer',',.2f'),
+            ('New customers','new_customers_count','d'),
+            ('Returning customers','returning_customers_count','d'),
+            ('Repeat-customer share','repeat_customer_share','.1%'),
+            ('Maximum bill','max_ticket',',.2f'),
+            ('Minimum bill','min_ticket',',.2f'),
+            ('Median bill','median_ticket',',.2f'),
+            ('Bill standard deviation','std_ticket',',.2f'),
+            ('Observation period, days','days_span','d'),
+            ('Revenue per day','revenue_per_day',',.2f'),
+            ('Revenue per month','revenue_per_month',',.2f'),
+        ]
+        model = QStandardItemModel(len(definitions), 2, self)
+        model.setHorizontalHeaderLabels(['Metric', 'Value'])
+        for row, (label, field, spec) in enumerate(definitions):
+            value = getattr(kpi, field)
+            model.setItem(row, 0, ValueItem(label))
+            model.setItem(row, 1, ValueItem(value, format(value, spec)))
+        return model
+
+    def _rfm_to_model(self, rfm):
+        model = QStandardItemModel(len(rfm), 5, self)
+        model.setHorizontalHeaderLabels(['Customer','Recency (days)','Frequency','Monetary','Segment'])
+        for row, (customer, score) in enumerate(rfm.items()):
+            for column, value in enumerate([customer, score.recency_days, score.frequency, score.monetary, score.segment]):
+                model.setItem(row, column, ValueItem(value))
+        return model
+
+    def _populate_graph_types(self, text):
+        self.graph_type_combo.clear()
+        mapping = {
+            GraphDataChoice.REVENUE_BY_DATE: [GraphType.LINE,GraphType.BAR],
+            GraphDataChoice.AVG_TICKET_BY_DATE: [GraphType.LINE,GraphType.BAR],
+            GraphDataChoice.TRANSACTIONS_BY_DATE: [GraphType.LINE,GraphType.BAR],
+            GraphDataChoice.REVENUE_BY_CATEGORY: [GraphType.BAR,GraphType.PIE],
+            GraphDataChoice.CUSTOMERS_BY_SEGMENT: [GraphType.BAR,GraphType.PIE,GraphType.LINE],
+            GraphDataChoice.REVENUE_DISTRIBUTION: [GraphType.HIST,GraphType.BOX],
+        }
+        self.graph_type_combo.addItems(mapping.get(text, []))
