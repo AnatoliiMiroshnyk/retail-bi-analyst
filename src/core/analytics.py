@@ -9,6 +9,9 @@ from datetime import datetime
 from typing import Dict, Optional
 
 import pandas as pd
+import math
+from dataclasses import fields
+from functools import wraps
 
 
 @dataclass
@@ -198,3 +201,19 @@ def calculate_rfm_results(
         )
 
     return results
+
+def _finite_analytics(function):
+    @wraps(function)
+    def checked(*args, **kwargs):
+        result = function(*args, **kwargs)
+        objects = result.values() if isinstance(result, dict) else [result]
+        for obj in objects:
+            for field in fields(obj):
+                value = getattr(obj, field.name)
+                if isinstance(value, (float, int)) and not math.isfinite(value):
+                    raise ValueError(f'Analytics overflow/non-finite result: {field.name}')
+        return result
+    return checked
+
+calculate_kpi_results = _finite_analytics(calculate_kpi_results)
+calculate_rfm_results = _finite_analytics(calculate_rfm_results)
