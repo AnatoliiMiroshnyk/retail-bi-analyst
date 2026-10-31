@@ -394,3 +394,4 @@ retail_bi_analyst/
 ```
 
 This structure mirrors common patterns from commercial Python projects, keeping the application code, data assets, and tests clearly separated while remaining easy to navigate.
+
