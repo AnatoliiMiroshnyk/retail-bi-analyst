@@ -6,11 +6,12 @@ from __future__ import annotations
 
 from typing import Dict, List
 from datetime import datetime
-import json
+from html import escape
+from src.reports.safety import script_json
 
 import pandas as pd
 
-from core.analytics import KPIResult, RFMScores
+from src.core.analytics import KPIResult, RFMScores
 
 
 def build_html_report(
@@ -56,10 +57,10 @@ def build_html_report(
     segment_labels: List[str] = list(segment_counts.keys())
     segment_values: List[int] = list(segment_counts.values())
 
-    json_revenue_labels = json.dumps(revenue_labels)
-    json_revenue_values = json.dumps(revenue_values)
-    json_segment_labels = json.dumps(segment_labels)
-    json_segment_values = json.dumps(segment_values)
+    json_revenue_labels = script_json(revenue_labels)
+    json_revenue_values = script_json(revenue_values)
+    json_segment_labels = script_json(segment_labels)
+    json_segment_values = script_json(segment_values)
 
     # --- Build HTML ---
     html = f"""<!DOCTYPE html>
@@ -154,7 +155,7 @@ def build_html_report(
     average bill: <strong>{kpi.avg_ticket:,.2f}</strong>,
     transactions: <strong>{kpi.transactions_count}</strong>,
     customers: <strong>{kpi.unique_customers}</strong>
-    {f"(up to {latest_date_str})" if latest_date_str else ""}
+    {f"(up to {escape(latest_date_str, quote=True)})" if latest_date_str else ""}
   </p>
 
   <div class="kpi-grid">
@@ -206,11 +207,11 @@ def build_html_report(
     # RFM table rows
     for cid, scores in rfm.items():
         html += (
-            f"<tr><td>{cid}</td>"
+            f"<tr><td>{escape(str(cid), quote=True)}</td>"
             f"<td>{scores.recency_days}</td>"
             f"<td>{scores.frequency}</td>"
             f"<td>{scores.monetary:,.2f}</td>"
-            f"<td>{scores.segment}</td></tr>"
+            f"<td>{escape(str(scores.segment), quote=True)}</td></tr>"
         )
 
     html += """

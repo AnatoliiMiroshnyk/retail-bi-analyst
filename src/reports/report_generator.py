@@ -8,11 +8,12 @@ from pathlib import Path
 from typing import Dict
 
 import pandas as pd
+from src.reports.safety import atomic_write, write_text_report
 
-from core.analytics import KPIResult, RFMScores
-from templates.report_templates_markdown import build_markdown_report_content
-from templates.report_templates_html import build_html_report
-from templates.report_templates_excel import build_excel_workbook
+from src.core.analytics import KPIResult, RFMScores
+from src.reports.templates.report_templates_markdown import build_markdown_report_content
+from src.reports.templates.report_templates_html import build_html_report
+from src.reports.templates.report_templates_excel import build_excel_workbook
 
 
 def generate_markdown_report(kpi: KPIResult, rfm: Dict[str, RFMScores]) -> str:
@@ -48,4 +49,4 @@ def generate_excel_report(
         generate_excel_report(kpi_results, rfm_results, df, wb_path)
     """
     workbook = build_excel_workbook(kpi, rfm, df)
-    workbook.save(output_path)
+    atomic_write(output_path, workbook.save)

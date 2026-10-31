@@ -5,8 +5,9 @@ Markdown report templates for Retail BI Analyst.
 from __future__ import annotations
 
 from typing import Dict
+from src.reports.safety import markdown_cell
 
-from core.analytics import KPIResult, RFMScores
+from src.core.analytics import KPIResult, RFMScores
 
 
 def build_markdown_report_content(kpi: KPIResult, rfm: Dict[str, RFMScores]) -> str:
@@ -112,8 +113,8 @@ def build_markdown_report_content(kpi: KPIResult, rfm: Dict[str, RFMScores]) -> 
 
     for cid, scores in rfm.items():
         lines.append(
-            f"| {cid} | {scores.recency_days} | {scores.frequency} | "
-            f"{scores.monetary:,.2f} | {scores.segment} |"
+            f"| {markdown_cell(cid)} | {scores.recency_days} | {scores.frequency} | "
+            f"{scores.monetary:,.2f} | {markdown_cell(scores.segment)} |"
         )
 
     lines.append("")
